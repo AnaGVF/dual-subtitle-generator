@@ -3,10 +3,12 @@ import {
   FileText,
   Languages,
   Loader2,
+  Moon,
   Paintbrush,
   Plus,
   Settings2,
   Sparkles,
+  Sun,
   Trash2,
   Type,
   Upload,
@@ -85,6 +87,7 @@ const getFileBaseName = (file: File) =>
   file.name.replace(/\.[^.]+$/, "").replace(/[^\w-]+/g, "-") || "reel";
 
 type NumericStyleKey = "fontSize" | "vertical" | "horizontal" | "outlineWidth";
+type ThemeMode = "light" | "dark";
 
 const numericStyleLimits: Record<NumericStyleKey, [number, number]> = {
   fontSize: [28, 96],
@@ -94,6 +97,15 @@ const numericStyleLimits: Record<NumericStyleKey, [number, number]> = {
 };
 
 export function App() {
+  const [theme, setTheme] = useState<ThemeMode>(() => {
+    if (typeof window === "undefined") {
+      return "light";
+    }
+
+    return window.localStorage.getItem("dual-subtitle-theme") === "dark"
+      ? "dark"
+      : "light";
+  });
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [videoUrl, setVideoUrl] = useState("");
   const [captions, setCaptions] = useState<Caption[]>([]);
@@ -116,6 +128,11 @@ export function App() {
   const previewRef = useRef<HTMLDivElement | null>(null);
   const controlPanelRef = useRef<HTMLElement | null>(null);
   const [controlPanelHeight, setControlPanelHeight] = useState(0);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    window.localStorage.setItem("dual-subtitle-theme", theme);
+  }, [theme]);
 
   useEffect(() => {
     const element = previewRef.current;
@@ -530,6 +547,16 @@ export function App() {
         <div className="status-cluster" aria-live="polite">
           {progressVisible && <Loader2 className="spin" size={18} />}
           <span className="status-pill">{status}</span>
+          <button
+            className="theme-toggle"
+            type="button"
+            onClick={() => setTheme((current) => (current === "light" ? "dark" : "light"))}
+            aria-label={`Switch to ${theme === "light" ? "dark" : "light"} mode`}
+            title={`Switch to ${theme === "light" ? "dark" : "light"} mode`}
+          >
+            {theme === "light" ? <Moon size={17} /> : <Sun size={17} />}
+            <span>{theme === "light" ? "Dark" : "Light"}</span>
+          </button>
         </div>
       </header>
 
@@ -1001,6 +1028,10 @@ export function App() {
           </div>
         )}
       </section>
+
+      <footer className="app-footer">
+      © All rights reserved by Ana Vassallo
+      </footer>
     </main>
   );
 }
