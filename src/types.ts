@@ -8,6 +8,8 @@ export type Caption = {
 
 export type SubtitleAnimation = "none" | "fade" | "rise" | "pop";
 
+export type SubtitleDisplayMode = "dual" | "source" | "translation";
+
 export type SubtitleStyle = {
   fontFamily: string;
   fontSize: number;
@@ -26,6 +28,7 @@ export type SubtitleStyle = {
   uppercase: boolean;
   animation: SubtitleAnimation;
   sourceFirst: boolean;
+  displayMode: SubtitleDisplayMode;
 };
 
 export type LanguageOption = {

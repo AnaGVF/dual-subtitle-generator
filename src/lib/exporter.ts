@@ -1,4 +1,5 @@
 import type { Caption, ExportResult, SubtitleStyle } from "../types";
+import { getCaptionDisplayLines } from "./subtitles";
 
 type ExportOptions = {
   videoFile: File;
@@ -259,28 +260,24 @@ function drawSubtitles(
     return;
   }
 
-  const source = style.uppercase
-    ? caption.source.toUpperCase()
-    : caption.source;
-  const translation = style.uppercase
-    ? caption.translation.toUpperCase()
-    : caption.translation;
-
   const primarySize = style.fontSize;
   const secondarySize = Math.round(style.fontSize * 0.72);
-  const orderedLines = style.sourceFirst
-    ? [
-        { text: source, role: "source" as const, size: secondarySize },
-        { text: translation, role: "translation" as const, size: primarySize }
-      ]
-    : [
-        { text: translation, role: "translation" as const, size: primarySize },
-        { text: source, role: "source" as const, size: secondarySize }
-      ];
+  const displayLines = getCaptionDisplayLines(caption, style);
+  const orderedLines = displayLines.map((line) => {
+    const text = style.uppercase ? line.text.toUpperCase() : line.text;
+    const size =
+      style.displayMode === "dual"
+        ? line.role === "translation"
+          ? primarySize
+          : secondarySize
+        : primarySize;
+
+    return { text, role: line.role, size };
+  });
 
   drawTextBlock(
     context,
-    orderedLines.filter((line) => line.text.trim()),
+    orderedLines,
     caption,
     style,
     time,

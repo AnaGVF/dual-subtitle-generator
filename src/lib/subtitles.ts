@@ -1,4 +1,9 @@
-import type { Caption } from "../types";
+import type { Caption, SubtitleDisplayMode, SubtitleStyle } from "../types";
+
+export type CaptionDisplayLine = {
+  text: string;
+  role: "source" | "translation";
+};
 
 const timePattern =
   /(?:(\d{1,2}):)?(\d{1,2}):(\d{2})(?:[,.](\d{1,3}))?/;
@@ -73,18 +78,50 @@ export function parseSubtitleFile(input: string): Caption[] {
     .sort((a, b) => a.start - b.start);
 }
 
+export function getCaptionDisplayLines(
+  caption: Caption,
+  options: Pick<SubtitleStyle, "displayMode" | "sourceFirst">
+): CaptionDisplayLine[] {
+  const source = caption.source.trim();
+  const translation = caption.translation.trim();
+
+  if (options.displayMode === "source") {
+    return source ? [{ text: source, role: "source" }] : [];
+  }
+
+  if (options.displayMode === "translation") {
+    const text = translation || source;
+
+    if (!text) {
+      return [];
+    }
+
+    return [{ text, role: translation ? "translation" : "source" }];
+  }
+
+  const lines = options.sourceFirst
+    ? [
+        { text: source, role: "source" as const },
+        { text: translation, role: "translation" as const }
+      ]
+    : [
+        { text: translation, role: "translation" as const },
+        { text: source, role: "source" as const }
+      ];
+
+  return lines.filter((line) => line.text);
+}
+
 export function captionsToSrt(
   captions: Caption[],
-  lineMode: "dual" | "source" | "translation" = "dual"
+  lineMode: SubtitleDisplayMode = "dual"
 ): string {
   return captions
     .map((caption, index) => {
-      const lines =
-        lineMode === "source"
-          ? [caption.source]
-          : lineMode === "translation"
-            ? [caption.translation || caption.source]
-            : [caption.source, caption.translation].filter(Boolean);
+      const lines = getCaptionDisplayLines(caption, {
+        displayMode: lineMode,
+        sourceFirst: true
+      }).map((line) => line.text);
 
       return [
         index + 1,

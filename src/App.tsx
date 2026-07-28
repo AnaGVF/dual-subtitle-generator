@@ -31,6 +31,7 @@ import {
   createCaptionId,
   downloadTextFile,
   formatClockTime,
+  getCaptionDisplayLines,
   parseSubtitleFile
 } from "./lib/subtitles";
 import { translateCaptions } from "./lib/translation";
@@ -58,7 +59,8 @@ const defaultStyle: SubtitleStyle = {
   showBackground: true,
   uppercase: false,
   animation: "rise",
-  sourceFirst: true
+  sourceFirst: true,
+  displayMode: "dual"
 };
 
 type WorkerResponse =
@@ -231,15 +233,10 @@ export function App() {
   } as CSSProperties;
 
   const orderedPreviewLines = activeCaption
-    ? style.sourceFirst
-      ? [
-          { value: activeCaption.source, className: "source-line" },
-          { value: activeCaption.translation, className: "translation-line" }
-        ]
-      : [
-          { value: activeCaption.translation, className: "translation-line" },
-          { value: activeCaption.source, className: "source-line" }
-        ]
+    ? getCaptionDisplayLines(activeCaption, style).map((line) => ({
+        value: line.text,
+        className: line.role === "source" ? "source-line" : "translation-line"
+      }))
     : [];
 
   const setStyleValue = <Key extends keyof SubtitleStyle>(
@@ -851,6 +848,21 @@ export function App() {
                 </button>
               ))}
             </div>
+            <label>
+              <span>Display</span>
+              <div className="segmented">
+                {(["dual", "source", "translation"] as const).map((mode) => (
+                  <button
+                    className={style.displayMode === mode ? "active" : ""}
+                    type="button"
+                    key={mode}
+                    onClick={() => setStyleValue("displayMode", mode)}
+                  >
+                    {mode === "dual" ? "Both" : mode === "source" ? "Source" : "Target"}
+                  </button>
+                ))}
+              </div>
+            </label>
             <div className="field-grid">
               <label>
                 <span>Animation</span>
@@ -871,6 +883,7 @@ export function App() {
                 <span>Line order</span>
                 <select
                   value={style.sourceFirst ? "source" : "target"}
+                  disabled={style.displayMode !== "dual"}
                   onChange={(event) =>
                     setStyleValue("sourceFirst", event.target.value === "source")
                   }
