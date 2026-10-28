@@ -259,7 +259,14 @@ self.addEventListener("message", async (event: MessageEvent<WorkerRequest>) => {
       options.language = request.language;
     }
 
-    const output = await recognizer(new Float32Array(request.audio), options);
+    let output: unknown;
+    try {
+      output = await recognizer(new Float32Array(request.audio), options);
+    } catch (wordErr) {
+      console.warn("Word-level timestamps failed, falling back to chunk timestamps:", wordErr);
+      options.return_timestamps = true;
+      output = await recognizer(new Float32Array(request.audio), options);
+    }
 
     post({
       type: "done",

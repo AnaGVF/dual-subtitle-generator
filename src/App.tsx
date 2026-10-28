@@ -1,11 +1,14 @@
 import {
   Download,
   FileText,
+  HelpCircle,
   Languages,
+  Layers,
   Loader2,
   Moon,
   Paintbrush,
   Plus,
+  RotateCcw,
   Settings2,
   Sparkles,
   Sun,
@@ -25,15 +28,26 @@ import {
 } from "react";
 import { fontOptions, languages, whisperModels } from "./data/languages";
 import { prepareAudioForTranscription } from "./lib/audio";
-import { exportVideoWithSubtitles } from "./lib/exporter";
 import {
+  exportGreenScreenSubtitleVideo,
+  exportTransparentSubtitleOverlay,
+  exportVideoWithSubtitles
+} from "./lib/exporter";
+import {
+  captionsToAss,
   captionsToSrt,
+  captionsToVtt,
   createCaptionId,
   downloadTextFile,
   formatClockTime,
   getCaptionDisplayLines,
   parseSubtitleFile
 } from "./lib/subtitles";
+import {
+  clearVideoFromStorage,
+  loadVideoFromStorage,
+  saveVideoToStorage
+} from "./lib/storage";
 import { translateCaptions } from "./lib/translation";
 import type {
   Caption,
@@ -110,13 +124,39 @@ export function App() {
   });
   const [videoFile, setVideoFile] = useState<File | null>(null);
   const [videoUrl, setVideoUrl] = useState("");
-  const [captions, setCaptions] = useState<Caption[]>([]);
-  const [sourceLanguage, setSourceLanguage] = useState("en");
-  const [targetLanguage, setTargetLanguage] = useState("es");
-  const [model, setModel] = useState(whisperModels[1].id);
-  const [provider, setProvider] = useState<TranslationProvider>("mymemory");
-  const [libreTranslateUrl, setLibreTranslateUrl] = useState("https://libretranslate.com");
-  const [style, setStyle] = useState<SubtitleStyle>(defaultStyle);
+  const [captions, setCaptions] = useState<Caption[]>(() => {
+    if (typeof window === "undefined") return [];
+    try {
+      const raw = window.localStorage.getItem("dual_subtitle_captions");
+      return raw ? JSON.parse(raw) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [sourceLanguage, setSourceLanguage] = useState(() => {
+    return (typeof window !== "undefined" && window.localStorage.getItem("dual_subtitle_source_lang")) || "en";
+  });
+  const [targetLanguage, setTargetLanguage] = useState(() => {
+    return (typeof window !== "undefined" && window.localStorage.getItem("dual_subtitle_target_lang")) || "es";
+  });
+  const [model, setModel] = useState(() => {
+    return (typeof window !== "undefined" && window.localStorage.getItem("dual_subtitle_model")) || whisperModels[1].id;
+  });
+  const [provider, setProvider] = useState<TranslationProvider>(() => {
+    return (typeof window !== "undefined" && (window.localStorage.getItem("dual_subtitle_provider") as TranslationProvider)) || "mymemory";
+  });
+  const [libreTranslateUrl, setLibreTranslateUrl] = useState(() => {
+    return (typeof window !== "undefined" && window.localStorage.getItem("dual_subtitle_libre_url")) || "https://libretranslate.com";
+  });
+  const [style, setStyle] = useState<SubtitleStyle>(() => {
+    if (typeof window === "undefined") return defaultStyle;
+    try {
+      const saved = window.localStorage.getItem("dual_subtitle_style");
+      return saved ? { ...defaultStyle, ...JSON.parse(saved) } : defaultStyle;
+    } catch {
+      return defaultStyle;
+    }
+  });
   const [currentTime, setCurrentTime] = useState(0);
   const [videoSize, setVideoSize] = useState({ width: 1080, height: 1920 });
   const [previewSize, setPreviewSize] = useState({ width: 360, height: 640 });
@@ -124,6 +164,8 @@ export function App() {
   const [busy, setBusy] = useState<"transcribe" | "translate" | "export" | null>(null);
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState("");
+  const [exportFps, setExportFps] = useState<30 | 60>(60);
+  const [showOverlayGuide, setShowOverlayGuide] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const workerRef = useRef<Worker | null>(null);
@@ -181,13 +223,74 @@ export function App() {
 
   useEffect(() => {
     return () => {
-      if (videoUrl) {
-        URL.revokeObjectURL(videoUrl);
-      }
-
       workerRef.current?.terminate();
     };
-  }, [videoUrl]);
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+
+    loadVideoFromStorage().then((savedFile) => {
+      if (mounted && savedFile) {
+        setVideoFile(savedFile);
+        const url = URL.createObjectURL(savedFile);
+        setVideoUrl(url);
+        setStatus("Restored session video");
+      }
+    });
+
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (videoFile) {
+      saveVideoToStorage(videoFile);
+    }
+  }, [videoFile]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem("dual_subtitle_captions", JSON.stringify(captions));
+    } catch (err) {
+      console.warn("Failed to persist captions:", err);
+    }
+  }, [captions]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem("dual_subtitle_style", JSON.stringify(style));
+    } catch (err) {
+      console.warn("Failed to persist style:", err);
+    }
+  }, [style]);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem("dual_subtitle_source_lang", sourceLanguage);
+      window.localStorage.setItem("dual_subtitle_target_lang", targetLanguage);
+      window.localStorage.setItem("dual_subtitle_model", model);
+      window.localStorage.setItem("dual_subtitle_provider", provider);
+      window.localStorage.setItem("dual_subtitle_libre_url", libreTranslateUrl);
+    } catch (err) {
+      console.warn("Failed to persist settings:", err);
+    }
+  }, [sourceLanguage, targetLanguage, model, provider, libreTranslateUrl]);
+
+  useEffect(() => {
+    const handleBeforeUnload = (event: BeforeUnloadEvent) => {
+      if (videoFile || captions.length > 0) {
+        event.preventDefault();
+        event.returnValue = "";
+      }
+    };
+
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
+    };
+  }, [videoFile, captions.length]);
 
   const activeCaption = useMemo(
     () => captions.find((caption) => currentTime >= caption.start && currentTime <= caption.end),
@@ -330,6 +433,29 @@ export function App() {
     setCurrentTime(0);
     setStatus("Video loaded");
     setError("");
+    saveVideoToStorage(file);
+  };
+
+  const handleClearSession = async () => {
+    if (!window.confirm("Are you sure you want to clear the video and captions?")) {
+      return;
+    }
+
+    if (videoUrl) {
+      URL.revokeObjectURL(videoUrl);
+    }
+
+    setVideoFile(null);
+    setVideoUrl("");
+    setCaptions([]);
+    setCurrentTime(0);
+    setStatus("Session cleared");
+    try {
+      window.localStorage.removeItem("dual_subtitle_captions");
+      await clearVideoFromStorage();
+    } catch (err) {
+      console.error("Failed to clear session:", err);
+    }
   };
 
   const handleSubtitleUpload = async (event: ChangeEvent<HTMLInputElement>) => {
@@ -340,15 +466,26 @@ export function App() {
     }
 
     const text = await file.text();
-    const parsed = parseSubtitleFile(text);
+    const result = parseSubtitleFile(text);
 
-    if (!parsed.length) {
+    if (!result.captions.length) {
       setError("No subtitle cues were found in that file.");
       return;
     }
 
-    setCaptions(parsed);
-    setStatus(`${parsed.length} subtitle cues imported`);
+    setCaptions(result.captions);
+
+    let statusMsg = `${result.captions.length} subtitle cues imported`;
+    if (result.detectedSourceColor || result.detectedTargetColor) {
+      setStyle((current) => ({
+        ...current,
+        ...(result.detectedSourceColor ? { textColor: result.detectedSourceColor } : {}),
+        ...(result.detectedTargetColor ? { translatedColor: result.detectedTargetColor } : {})
+      }));
+      statusMsg += " (custom colors preserved)";
+    }
+
+    setStatus(statusMsg);
     setError("");
   };
 
@@ -363,7 +500,7 @@ export function App() {
     return workerRef.current;
   };
 
-  const generateCaptions = async () => {
+  const generateCaptions = async (autoTranslate = false) => {
     if (!videoFile || busy) {
       return;
     }
@@ -398,7 +535,7 @@ export function App() {
 
     const worker = getWorker();
 
-    worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
+    worker.onmessage = async (event: MessageEvent<WorkerResponse>) => {
       const message = event.data;
 
       if (message.type === "status") {
@@ -420,10 +557,36 @@ export function App() {
       }
 
       if (message.type === "done") {
-        setCaptions(message.captions);
-        setBusy(null);
-        setProgress(1);
-        setStatus(`${message.captions.length} subtitle cues generated`);
+        if (autoTranslate && message.captions.length > 0) {
+          setCaptions(message.captions);
+          setBusy("translate");
+          setStatus("Translating subtitles...");
+          try {
+            const translated = await translateCaptions(message.captions, {
+              provider,
+              sourceLanguage,
+              targetLanguage,
+              libreTranslateUrl,
+              onProgress: (completed, total) => {
+                setProgress(0.8 + (total ? (completed / total) * 0.2 : 0.2));
+                setStatus(`Translated ${completed} of ${total}`);
+              }
+            });
+            setCaptions(translated);
+            setStatus(`${translated.length} dual subtitle cues ready!`);
+          } catch (transErr) {
+            console.warn("Auto-translation failed:", transErr);
+            setStatus(`${message.captions.length} captions generated`);
+          } finally {
+            setBusy(null);
+            setProgress(1);
+          }
+        } else {
+          setCaptions(message.captions);
+          setBusy(null);
+          setProgress(1);
+          setStatus(`${message.captions.length} subtitle cues generated`);
+        }
       }
 
       if (message.type === "error") {
@@ -491,7 +654,136 @@ export function App() {
     const suffix = mode === "dual" ? "dual" : mode;
     const name = videoFile ? getFileBaseName(videoFile) : "subtitles";
 
-    downloadTextFile(captionsToSrt(captions, mode), `${name}-${suffix}.srt`);
+    downloadTextFile(captionsToSrt(captions, mode, style), `${name}-${suffix}.srt`);
+  };
+
+  const downloadAss = () => {
+    if (!captions.length) {
+      return;
+    }
+
+    const name = videoFile ? getFileBaseName(videoFile) : "subtitles";
+    downloadTextFile(
+      captionsToAss(captions, style, videoSize.width, videoSize.height),
+      `${name}-styled.ass`
+    );
+  };
+
+  const downloadVtt = (mode: "dual" | "source" | "translation" = "dual") => {
+    if (!captions.length) {
+      return;
+    }
+
+    const suffix = mode === "dual" ? "dual" : mode;
+    const name = videoFile ? getFileBaseName(videoFile) : "subtitles";
+
+    downloadTextFile(captionsToVtt(captions, mode, style), `${name}-${suffix}.vtt`);
+  };
+
+  const exportGreenScreenVideo = async () => {
+    if (!captions.length || busy) {
+      return;
+    }
+
+    const duration =
+      videoRef.current?.duration && Number.isFinite(videoRef.current.duration)
+        ? videoRef.current.duration
+        : Math.max(...captions.map((c) => c.end), 10);
+
+    setBusy("export");
+    setProgress(0);
+    setError("");
+    setStatus(`Rendering Green Screen MP4 at ${exportFps} FPS`);
+
+    try {
+      const name = videoFile ? getFileBaseName(videoFile) : "subtitles";
+      const result = await exportGreenScreenSubtitleVideo({
+        captions,
+        style,
+        fileBaseName: name,
+        duration,
+        width: videoSize.width,
+        height: videoSize.height,
+        fps: exportFps,
+        onProgress: (value) => {
+          setProgress(value);
+          setStatus(`Rendering Green Screen ${exportFps} FPS ${Math.round(value * 100)}%`);
+        }
+      });
+      const url = URL.createObjectURL(result.blob);
+      const anchor = document.createElement("a");
+
+      anchor.href = url;
+      anchor.download = result.fileName;
+      anchor.style.display = "none";
+      document.body.appendChild(anchor);
+      anchor.click();
+      document.body.removeChild(anchor);
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+      setStatus("Green Screen MP4 ready!");
+      setProgress(1);
+    } catch (greenScreenError) {
+      setError(
+        greenScreenError instanceof Error
+          ? greenScreenError.message
+          : "Green Screen export failed."
+      );
+      setStatus("Export stopped");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const exportOverlayVideo = async () => {
+    if (!captions.length || busy) {
+      return;
+    }
+
+    const duration =
+      videoRef.current?.duration && Number.isFinite(videoRef.current.duration)
+        ? videoRef.current.duration
+        : Math.max(...captions.map((c) => c.end), 10);
+
+    setBusy("export");
+    setProgress(0);
+    setError("");
+    setStatus(`Rendering transparent overlay at ${exportFps} FPS`);
+
+    try {
+      const name = videoFile ? getFileBaseName(videoFile) : "subtitles";
+      const result = await exportTransparentSubtitleOverlay({
+        captions,
+        style,
+        fileBaseName: name,
+        duration,
+        width: videoSize.width,
+        height: videoSize.height,
+        fps: exportFps,
+        onProgress: (value) => {
+          setProgress(value);
+          setStatus(`Rendering overlay ${exportFps} FPS ${Math.round(value * 100)}%`);
+        }
+      });
+      const url = URL.createObjectURL(result.blob);
+      const anchor = document.createElement("a");
+
+      anchor.href = url;
+      anchor.download = result.fileName;
+      anchor.style.display = "none";
+      document.body.appendChild(anchor);
+      anchor.click();
+      document.body.removeChild(anchor);
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+      setStatus("Overlay ready");
+      setProgress(1);
+    } catch (overlayError) {
+      setError(
+        overlayError instanceof Error ? overlayError.message : "Overlay export failed."
+      );
+      setStatus("Export stopped");
+    } finally {
+      setBusy(null);
+    }
   };
 
   const exportVideo = async () => {
@@ -502,7 +794,7 @@ export function App() {
     setBusy("export");
     setProgress(0);
     setError("");
-    setStatus("Rendering final video");
+    setStatus(`Rendering video at ${exportFps} FPS`);
 
     try {
       const result = await exportVideoWithSubtitles({
@@ -510,9 +802,10 @@ export function App() {
         captions,
         style,
         fileBaseName: getFileBaseName(videoFile),
+        fps: exportFps,
         onProgress: (value) => {
           setProgress(value);
-          setStatus(`Rendering ${Math.round(value * 100)}%`);
+          setStatus(`Rendering ${exportFps} FPS ${Math.round(value * 100)}%`);
         }
       });
       const url = URL.createObjectURL(result.blob);
@@ -520,8 +813,11 @@ export function App() {
 
       anchor.href = url;
       anchor.download = result.fileName;
+      anchor.style.display = "none";
+      document.body.appendChild(anchor);
       anchor.click();
-      URL.revokeObjectURL(url);
+      document.body.removeChild(anchor);
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
       setStatus("Export ready");
       setProgress(1);
     } catch (exportError) {
@@ -577,15 +873,17 @@ export function App() {
                 onChange={handleSubtitleUpload}
               />
             </label>
-            <button
-              className="icon-text-button"
-              type="button"
-              onClick={addCaption}
-              title="Add caption"
-            >
-              <Plus size={18} />
-              Add
-            </button>
+            {videoFile && (
+              <button
+                className="icon-text-button secondary"
+                type="button"
+                onClick={handleClearSession}
+                title="Clear current video and captions"
+              >
+                <RotateCcw size={16} />
+                Reset
+              </button>
+            )}
           </div>
 
           <div
@@ -691,17 +989,19 @@ export function App() {
               <button
                 className="primary-button"
                 type="button"
-                onClick={generateCaptions}
+                onClick={() => generateCaptions(true)}
                 disabled={!videoFile || Boolean(busy)}
+                title="Transcribe speech and auto-translate into dual subtitles in one click"
               >
                 <WandSparkles size={18} />
-                Generate
+                Generate & Translate
               </button>
               <button
                 className="secondary-button"
                 type="button"
                 onClick={runTranslation}
                 disabled={!captions.length || Boolean(busy)}
+                title="Translate or re-translate existing captions"
               >
                 <Sparkles size={18} />
                 Translate
@@ -916,41 +1216,144 @@ export function App() {
           <section className="control-section">
             <div className="section-title">
               <Download size={18} />
-              <h2>Export</h2>
+              <h2>Export & Overlays</h2>
             </div>
-            <button
-              className="export-button"
-              type="button"
-              onClick={exportVideo}
-              disabled={!videoFile || !captions.length || Boolean(busy)}
-            >
-              <Download size={18} />
-              Export video
-            </button>
-            <div className="button-row compact">
-              <button type="button" onClick={() => downloadSrt("dual")} disabled={!captions.length}>
-                Dual SRT
-              </button>
-              <button
-                type="button"
-                onClick={() => downloadSrt("source")}
-                disabled={!captions.length}
-              >
-                Source
-              </button>
-              <button
-                type="button"
-                onClick={() => downloadSrt("translation")}
-                disabled={!captions.length}
-              >
-                Target
-              </button>
+
+            <div className="export-subsection">
+              <div className="subsection-header">
+                <span className="subsection-label">Subtitle Overlay Files (Instant)</span>
+                <button
+                  type="button"
+                  className="guide-toggle-btn"
+                  onClick={() => setShowOverlayGuide((prev) => !prev)}
+                  title="How to overlay on video"
+                >
+                  <HelpCircle size={14} />
+                  <span>How to use</span>
+                </button>
+              </div>
+
+              {showOverlayGuide && (
+                <div className="overlay-guide-box">
+                  <p><strong>To overlay subtitles on your video without lag:</strong></p>
+                  <ul>
+                    <li><strong>Green Screen MP4 (Fastest &amp; 100% styled):</strong> Drag the <code>.mp4</code> onto Track 2 above your video. In CapCut click <em>Video &rarr; Cutout &rarr; Chroma Key</em> and pick green. In Premiere use <em>Ultra Key</em>. In DaVinci use <em>3D Keyer</em>. Your styling is 100% preserved with zero rendering lag!</li>
+                    <li><strong>Transparent WebM:</strong> Drag onto Track 2 directly without needing Chroma Key.</li>
+                    <li><strong>CapCut SRT:</strong> Click <em>Text</em> &rarr; <em>Local Subtitles / Import</em> to load your <code>.srt</code> or <code>.ass</code>.</li>
+                    <li><strong>Premiere Pro:</strong> Drag <code>.srt</code>, <code>.ass</code>, or transparent video right onto the timeline track above your video.</li>
+                    <li><strong>DaVinci Resolve:</strong> Drag <code>.srt</code> or <code>.ass</code> onto the Subtitle track.</li>
+                  </ul>
+                </div>
+              )}
+
+              <div className="button-grid-subtitles">
+                <button
+                  type="button"
+                  className="download-pill-btn highlight"
+                  onClick={() => downloadSrt("dual")}
+                  disabled={!captions.length}
+                  title="Download Dual SRT (Source & Translation)"
+                >
+                  <FileText size={14} />
+                  <span>Dual SRT</span>
+                </button>
+                <button
+                  type="button"
+                  className="download-pill-btn highlight-ass"
+                  onClick={downloadAss}
+                  disabled={!captions.length}
+                  title="Download Styled SubStation Alpha (.ass) with exact colors & fonts"
+                >
+                  <FileText size={14} />
+                  <span>Styled (.ass)</span>
+                </button>
+                <button
+                  type="button"
+                  className="download-pill-btn"
+                  onClick={() => downloadSrt("source")}
+                  disabled={!captions.length}
+                  title="Download Source Language SRT"
+                >
+                  <span>Source SRT</span>
+                </button>
+                <button
+                  type="button"
+                  className="download-pill-btn"
+                  onClick={() => downloadSrt("translation")}
+                  disabled={!captions.length}
+                  title="Download Translated SRT"
+                >
+                  <span>Target SRT</span>
+                </button>
+                <button
+                  type="button"
+                  className="download-pill-btn"
+                  onClick={() => downloadVtt("dual")}
+                  disabled={!captions.length}
+                  title="Download WebVTT (.vtt)"
+                >
+                  <span>WebVTT</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="export-subsection" style={{ marginTop: "16px" }}>
+              <span className="subsection-label">Video Overlays &amp; Burn-in</span>
+              <div className="field-grid" style={{ margin: "8px 0 10px" }}>
+                <label>
+                  <span>Framerate</span>
+                  <select
+                    value={exportFps}
+                    onChange={(e) => setExportFps(Number(e.target.value) as 30 | 60)}
+                  >
+                    <option value={60}>60 FPS (Ultra Smooth)</option>
+                    <option value={30}>30 FPS (Standard)</option>
+                  </select>
+                </label>
+              </div>
+
+              <div className="video-export-actions">
+                <button
+                  className="export-button green-screen-btn"
+                  type="button"
+                  onClick={exportGreenScreenVideo}
+                  disabled={!captions.length || Boolean(busy)}
+                  title="Ultra-fast MP4 overlay (renders in seconds, 0% lag). Drop on Track 2 in CapCut / Premiere / DaVinci and click Chroma Key!"
+                >
+                  <Sparkles size={18} />
+                  <span>Green Screen MP4 (Ultra Fast)</span>
+                </button>
+
+                <button
+                  className="export-button secondary-overlay-btn"
+                  type="button"
+                  onClick={exportOverlayVideo}
+                  disabled={!captions.length || Boolean(busy)}
+                  title="Export transparent video overlay (.webm with alpha) to drop onto Track 2 in CapCut / Premiere / DaVinci"
+                >
+                  <Layers size={18} />
+                  <span>Transparent Overlay (.webm)</span>
+                </button>
+
+                <button
+                  className="export-button"
+                  type="button"
+                  onClick={exportVideo}
+                  disabled={!videoFile || !captions.length || Boolean(busy)}
+                  title="Burn subtitles directly into video file"
+                >
+                  <Download size={18} />
+                  <span>Burn into Video ({exportFps} FPS)</span>
+                </button>
+              </div>
             </div>
           </section>
         </aside>
-      </section>
 
-      <section className="editor-panel">
+        <section
+          className="editor-panel"
+          style={controlPanelHeight ? { height: controlPanelHeight } : undefined}
+        >
         <div className="editor-header">
           <div className="section-title">
             <Type size={18} />
@@ -960,6 +1363,15 @@ export function App() {
             <Settings2 size={16} />
             <span>{captions.length} cues</span>
             <span>{formatClockTime(currentTime)}</span>
+            <button
+              className="icon-text-button add-cue-btn"
+              type="button"
+              onClick={addCaption}
+              title="Add caption at current playback time"
+            >
+              <Plus size={16} />
+              <span>Add</span>
+            </button>
           </div>
         </div>
 
@@ -1038,8 +1450,34 @@ export function App() {
           <div className="empty-editor">
             <FileText size={28} />
             <span>No captions yet</span>
+            {videoFile ? (
+              <button
+                className="primary-button"
+                type="button"
+                onClick={() => generateCaptions(true)}
+                disabled={Boolean(busy)}
+                style={{ marginTop: "10px", gap: "8px", maxWidth: "220px" }}
+              >
+                <WandSparkles size={16} />
+                <span>Generate Subtitles</span>
+              </button>
+            ) : (
+              <p style={{ fontSize: "0.82rem", color: "var(--text-muted)", margin: "6px 0 0" }}>
+                Upload a video or import an SRT file to start
+              </p>
+            )}
+            <button
+              className="icon-text-button secondary add-cue-btn"
+              type="button"
+              onClick={addCaption}
+              style={{ maxWidth: "160px", marginTop: "8px" }}
+            >
+              <Plus size={14} />
+              <span>Add manual cue</span>
+            </button>
           </div>
         )}
+      </section>
       </section>
 
       <footer className="app-footer">

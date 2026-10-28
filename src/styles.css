@@ -1,5 +1,5 @@
 :root {
-  --tool-panel-width: 400px;
+  --tool-panel-width: 380px;
   --app-bg:
     radial-gradient(circle at top left, rgba(8, 127, 140, 0.16), transparent 34%),
     radial-gradient(circle at top right, rgba(212, 91, 78, 0.11), transparent 32%),
@@ -115,7 +115,7 @@ input:disabled {
 }
 
 .app-shell {
-  width: min(1480px, calc(100vw - 32px));
+  width: min(1820px, calc(100vw - 32px));
   margin: 0 auto;
   padding: 26px 0 32px;
 }
@@ -207,7 +207,7 @@ h2 {
 
 .workspace {
   display: grid;
-  grid-template-columns: minmax(360px, 1fr) var(--tool-panel-width);
+  grid-template-columns: minmax(320px, 1fr) var(--tool-panel-width) minmax(380px, 1.25fr);
   gap: 18px;
   align-items: start;
   justify-content: stretch;
@@ -380,11 +380,12 @@ h2 {
 
 .source-line {
   color: var(--subtitle-text);
-  font-size: var(--subtitle-secondary-size);
+
 }
 
 .translation-line {
   color: var(--subtitle-translation);
+  font-size: var(--subtitle-secondary-size);
 }
 
 .animation-fade {
@@ -557,7 +558,11 @@ input[type="color"] {
 }
 
 .editor-panel {
-  margin-top: 18px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  container-type: inline-size;
+  container-name: editor;
   padding: 14px;
 }
 
@@ -567,23 +572,38 @@ input[type="color"] {
   align-items: center;
   gap: 16px;
   margin-bottom: 12px;
+  flex-shrink: 0;
 }
 
 .editor-meta {
+  display: flex;
+  align-items: center;
   gap: 10px;
   color: var(--text-muted);
   font-size: 0.86rem;
   font-weight: 800;
 }
 
+.add-cue-btn {
+  min-height: 32px;
+  padding: 0 10px;
+  gap: 5px;
+  font-size: 0.82rem;
+}
+
 .caption-list {
-  display: grid;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+  padding-right: 4px;
   gap: 10px;
 }
 
 .caption-row {
   display: grid;
-  grid-template-columns: 42px minmax(130px, 170px) minmax(180px, 1fr) minmax(180px, 1fr) 42px;
+  grid-template-columns: 36px minmax(110px, 140px) minmax(120px, 1fr) minmax(120px, 1fr) 36px;
   gap: 10px;
   align-items: stretch;
   padding: 10px;
@@ -595,6 +615,36 @@ input[type="color"] {
 .caption-row.active {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+@container editor (max-width: 520px) {
+  .caption-row {
+    grid-template-columns: 32px 1fr 34px;
+    grid-template-areas:
+      "idx times del"
+      "src src src"
+      "tgt tgt tgt";
+  }
+
+  .caption-row .row-index {
+    grid-area: idx;
+  }
+
+  .caption-row .time-fields {
+    grid-area: times;
+  }
+
+  .caption-row .icon-button.danger {
+    grid-area: del;
+  }
+
+  .caption-row .text-field:nth-of-type(1) {
+    grid-area: src;
+  }
+
+  .caption-row .text-field:nth-of-type(2) {
+    grid-area: tgt;
+  }
 }
 
 .row-index {
@@ -696,6 +746,11 @@ input[type="color"] {
     height: auto !important;
   }
 
+  .editor-panel {
+    height: auto !important;
+    max-height: 520px;
+  }
+
   .control-section {
     margin-bottom: 0;
     padding-bottom: 0;
@@ -739,4 +794,159 @@ input[type="color"] {
     top: 10px;
     right: 10px;
   }
+}
+
+/* Export & Overlay Controls */
+.export-subsection {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.subsection-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.subsection-label {
+  font-size: 0.8rem;
+  font-weight: 800;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.guide-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  border: 0;
+  color: var(--accent);
+  font-size: 0.78rem;
+  font-weight: 700;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: background 150ms ease;
+}
+
+.guide-toggle-btn:hover {
+  background: var(--surface-muted);
+}
+
+.overlay-guide-box {
+  background: var(--surface-muted);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 0.8rem;
+  line-height: 1.45;
+  color: var(--text);
+  margin-bottom: 6px;
+}
+
+.overlay-guide-box p {
+  margin: 0 0 6px;
+  font-size: 0.82rem;
+}
+
+.overlay-guide-box ul {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.overlay-guide-box code {
+  background: var(--surface-strong);
+  padding: 1px 4px;
+  border-radius: 4px;
+  font-size: 0.76rem;
+  border: 1px solid var(--border);
+}
+
+.button-grid-subtitles {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+}
+
+.download-pill-btn {
+  min-height: 38px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--surface-strong);
+  color: var(--text);
+  font-weight: 700;
+  font-size: 0.82rem;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 10px;
+  cursor: pointer;
+  transition: all 160ms ease;
+}
+
+.download-pill-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent-strong);
+  transform: translateY(-1px);
+}
+
+.download-pill-btn.highlight {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, var(--surface-strong));
+  color: var(--accent-strong);
+  font-weight: 800;
+}
+
+.download-pill-btn.highlight-ass {
+  border-color: #f59e0b;
+  background: color-mix(in srgb, #f59e0b 14%, var(--surface-strong));
+  color: #d97706;
+  font-weight: 800;
+}
+
+[data-theme="dark"] .download-pill-btn.highlight-ass {
+  color: #fbbf24;
+}
+
+.video-export-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.secondary-overlay-btn {
+  background: color-mix(in srgb, var(--accent) 18%, var(--surface-strong)) !important;
+  border-color: var(--accent) !important;
+  color: var(--accent-strong) !important;
+}
+
+.secondary-overlay-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent) 26%, var(--surface-strong)) !important;
+}
+
+.green-screen-btn {
+  background: color-mix(in srgb, #10b981 22%, var(--surface-strong)) !important;
+  border-color: #10b981 !important;
+  color: #059669 !important;
+  font-weight: 800 !important;
+}
+
+[data-theme="dark"] .green-screen-btn {
+  background: color-mix(in srgb, #10b981 18%, var(--surface-strong)) !important;
+  color: #34d399 !important;
+  border-color: #059669 !important;
+}
+
+.green-screen-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, #10b981 30%, var(--surface-strong)) !important;
+  border-color: #10b981 !important;
+  transform: translateY(-1px);
 }
