@@ -416,6 +416,13 @@ export function App() {
     setCaptions((current) => current.filter((caption) => caption.id !== id));
   };
 
+  const seekToCaption = (timeInSeconds: number) => {
+    if (videoRef.current) {
+      videoRef.current.currentTime = timeInSeconds;
+    }
+    setCurrentTime(timeInSeconds);
+  };
+
   const handleVideoUpload = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
 
@@ -1253,7 +1260,14 @@ export function App() {
                   className={activeCaption?.id === caption.id ? "caption-row active" : "caption-row"}
                   key={caption.id}
                 >
-                  <div className="row-index">{index + 1}</div>
+                  <button
+                    type="button"
+                    className="row-index"
+                    onClick={() => seekToCaption(caption.start)}
+                    title={`Jump video to start (${caption.start.toFixed(1)}s)`}
+                  >
+                    {index + 1}
+                  </button>
                   <div className="time-fields">
                     <label>
                       <span>Start</span>
@@ -1441,8 +1455,8 @@ export function App() {
                           {selectedSrtMode === "dual"
                             ? "Export Dual SRT"
                             : selectedSrtMode === "source"
-                            ? "Export Source SRT"
-                            : "Export Target SRT"}
+                              ? "Export Source SRT"
+                              : "Export Target SRT"}
                         </span>
                       </>
                     )}
