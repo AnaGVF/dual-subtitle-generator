@@ -1,6 +1,9 @@
 import {
+  Check,
+  Clock,
   Download,
   FileText,
+  Film,
   HelpCircle,
   Languages,
   Layers,
@@ -9,13 +12,15 @@ import {
   Paintbrush,
   Plus,
   RotateCcw,
+  Save,
   Settings2,
   Sparkles,
   Sun,
   Trash2,
   Type,
   Upload,
-  WandSparkles
+  WandSparkles,
+  X
 } from "lucide-react";
 import {
   ChangeEvent,
@@ -29,9 +34,7 @@ import {
 import { fontOptions, languages, whisperModels } from "./data/languages";
 import { prepareAudioForTranscription } from "./lib/audio";
 import {
-  exportGreenScreenSubtitleVideo,
-  exportTransparentSubtitleOverlay,
-  exportVideoWithSubtitles
+  exportGreenScreenSubtitleVideo
 } from "./lib/exporter";
 import {
   captionsToAss,
@@ -165,13 +168,17 @@ export function App() {
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState("");
   const [exportFps, setExportFps] = useState<30 | 60>(60);
-  const [showOverlayGuide, setShowOverlayGuide] = useState(false);
+  const [showGreenScreenGuide, setShowGreenScreenGuide] = useState(false);
+  const [showExportModal, setShowExportModal] = useState(false);
+  const [savedFeedback, setSavedFeedback] = useState(false);
+  const [exportSuccess, setExportSuccess] = useState(false);
+  const [selectedSrtMode, setSelectedSrtMode] = useState<"dual" | "source" | "translation">("dual");
+  const [srtSuccess, setSrtSuccess] = useState(false);
+  const [notifyFeedback, setNotifyFeedback] = useState<{ message: string; type: "save" | "reset" } | null>(null);
 
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const workerRef = useRef<Worker | null>(null);
   const previewRef = useRef<HTMLDivElement | null>(null);
-  const controlPanelRef = useRef<HTMLElement | null>(null);
-  const [controlPanelHeight, setControlPanelHeight] = useState(0);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -200,32 +207,24 @@ export function App() {
     return () => observer.disconnect();
   }, []);
 
-  useEffect(() => {
-    const element = controlPanelRef.current;
 
-    if (!element) {
-      return;
-    }
-
-    const observer = new ResizeObserver(() => {
-      const nextHeight = Math.ceil(element.getBoundingClientRect().height);
-
-      setControlPanelHeight((currentHeight) =>
-        Math.abs(currentHeight - nextHeight) < 1 ? currentHeight : nextHeight
-      );
-    });
-
-    observer.observe(element);
-    setControlPanelHeight(Math.ceil(element.getBoundingClientRect().height));
-
-    return () => observer.disconnect();
-  }, []);
 
   useEffect(() => {
     return () => {
       workerRef.current?.terminate();
     };
   }, []);
+
+  useEffect(() => {
+    if (!showExportModal) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setShowExportModal(false);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [showExportModal]);
 
   useEffect(() => {
     let mounted = true;
@@ -337,9 +336,9 @@ export function App() {
 
   const orderedPreviewLines = activeCaption
     ? getCaptionDisplayLines(activeCaption, style).map((line) => ({
-        value: line.text,
-        className: line.role === "source" ? "source-line" : "translation-line"
-      }))
+      value: line.text,
+      className: line.role === "source" ? "source-line" : "translation-line"
+    }))
     : [];
 
   const setStyleValue = <Key extends keyof SubtitleStyle>(
@@ -449,12 +448,38 @@ export function App() {
     setVideoUrl("");
     setCaptions([]);
     setCurrentTime(0);
-    setStatus("Session cleared");
+    setNotifyFeedback({ message: "Session cleared", type: "reset" });
+    setTimeout(() => setNotifyFeedback(null), 2800);
     try {
       window.localStorage.removeItem("dual_subtitle_captions");
       await clearVideoFromStorage();
     } catch (err) {
       console.error("Failed to clear session:", err);
+    }
+  };
+
+  const handleSaveSession = async () => {
+    try {
+      if (videoFile) {
+        await saveVideoToStorage(videoFile);
+      }
+      window.localStorage.setItem("dual_subtitle_captions", JSON.stringify(captions));
+      window.localStorage.setItem("dual_subtitle_style", JSON.stringify(style));
+      window.localStorage.setItem("dual_subtitle_source_lang", sourceLanguage);
+      window.localStorage.setItem("dual_subtitle_target_lang", targetLanguage);
+      window.localStorage.setItem("dual_subtitle_model", model);
+      window.localStorage.setItem("dual_subtitle_provider", provider);
+      window.localStorage.setItem("dual_subtitle_libre_url", libreTranslateUrl);
+
+      setSavedFeedback(true);
+      setNotifyFeedback({ message: "Progress saved", type: "save" });
+      setStatus("Project saved!");
+      setTimeout(() => setSavedFeedback(false), 2200);
+      setTimeout(() => setNotifyFeedback(null), 2800);
+      setTimeout(() => setStatus("Ready"), 3000);
+    } catch (err) {
+      console.error("Failed to save project:", err);
+      setError("Failed to save project.");
     }
   };
 
@@ -657,6 +682,21 @@ export function App() {
     downloadTextFile(captionsToSrt(captions, mode, style), `${name}-${suffix}.srt`);
   };
 
+  const handleExportSrt = () => {
+    if (!captions.length) return;
+    downloadSrt(selectedSrtMode);
+    setSrtSuccess(true);
+    setNotifyFeedback({
+      message: `${selectedSrtMode === "dual" ? "Dual" : selectedSrtMode === "source" ? "Source" : "Target"} SRT downloaded`,
+      type: "save"
+    });
+    setTimeout(() => setNotifyFeedback(null), 3000);
+    setTimeout(() => {
+      setShowExportModal(false);
+      setSrtSuccess(false);
+    }, 1200);
+  };
+
   const downloadAss = () => {
     if (!captions.length) {
       return;
@@ -720,8 +760,16 @@ export function App() {
       anchor.click();
       document.body.removeChild(anchor);
       setTimeout(() => URL.revokeObjectURL(url), 60000);
-      setStatus("Green Screen MP4 ready!");
+      setStatus("Download successful!");
       setProgress(1);
+      setExportSuccess(true);
+      setNotifyFeedback({ message: "Download successful", type: "save" });
+      setTimeout(() => setNotifyFeedback(null), 3500);
+
+      setTimeout(() => {
+        setShowExportModal(false);
+        setExportSuccess(false);
+      }, 1400);
     } catch (greenScreenError) {
       setError(
         greenScreenError instanceof Error
@@ -734,107 +782,13 @@ export function App() {
     }
   };
 
-  const exportOverlayVideo = async () => {
-    if (!captions.length || busy) {
-      return;
-    }
-
-    const duration =
-      videoRef.current?.duration && Number.isFinite(videoRef.current.duration)
-        ? videoRef.current.duration
-        : Math.max(...captions.map((c) => c.end), 10);
-
-    setBusy("export");
-    setProgress(0);
-    setError("");
-    setStatus(`Rendering transparent overlay at ${exportFps} FPS`);
-
-    try {
-      const name = videoFile ? getFileBaseName(videoFile) : "subtitles";
-      const result = await exportTransparentSubtitleOverlay({
-        captions,
-        style,
-        fileBaseName: name,
-        duration,
-        width: videoSize.width,
-        height: videoSize.height,
-        fps: exportFps,
-        onProgress: (value) => {
-          setProgress(value);
-          setStatus(`Rendering overlay ${exportFps} FPS ${Math.round(value * 100)}%`);
-        }
-      });
-      const url = URL.createObjectURL(result.blob);
-      const anchor = document.createElement("a");
-
-      anchor.href = url;
-      anchor.download = result.fileName;
-      anchor.style.display = "none";
-      document.body.appendChild(anchor);
-      anchor.click();
-      document.body.removeChild(anchor);
-      setTimeout(() => URL.revokeObjectURL(url), 60000);
-      setStatus("Overlay ready");
-      setProgress(1);
-    } catch (overlayError) {
-      setError(
-        overlayError instanceof Error ? overlayError.message : "Overlay export failed."
-      );
-      setStatus("Export stopped");
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const exportVideo = async () => {
-    if (!videoFile || !captions.length || busy) {
-      return;
-    }
-
-    setBusy("export");
-    setProgress(0);
-    setError("");
-    setStatus(`Rendering video at ${exportFps} FPS`);
-
-    try {
-      const result = await exportVideoWithSubtitles({
-        videoFile,
-        captions,
-        style,
-        fileBaseName: getFileBaseName(videoFile),
-        fps: exportFps,
-        onProgress: (value) => {
-          setProgress(value);
-          setStatus(`Rendering ${exportFps} FPS ${Math.round(value * 100)}%`);
-        }
-      });
-      const url = URL.createObjectURL(result.blob);
-      const anchor = document.createElement("a");
-
-      anchor.href = url;
-      anchor.download = result.fileName;
-      anchor.style.display = "none";
-      document.body.appendChild(anchor);
-      anchor.click();
-      document.body.removeChild(anchor);
-      setTimeout(() => URL.revokeObjectURL(url), 60000);
-      setStatus("Export ready");
-      setProgress(1);
-    } catch (exportError) {
-      setError(exportError instanceof Error ? exportError.message : "Export failed.");
-      setStatus("Export stopped");
-    } finally {
-      setBusy(null);
-    }
-  };
-
   const progressVisible = Boolean(busy);
 
   return (
     <main className="app-shell">
       <header className="topbar">
-        <div>
-          <p className="eyebrow">Local dual subtitle studio</p>
+        <div className="title-block">
+          <p className="eyebrow">The dual subtitle studio</p>
           <h1>Dual Subtitle Generator</h1>
         </div>
         <div className="status-cluster" aria-live="polite">
@@ -850,40 +804,61 @@ export function App() {
             {theme === "light" ? <Moon size={17} /> : <Sun size={17} />}
             <span>{theme === "light" ? "Dark" : "Light"}</span>
           </button>
+          <button
+            className="topbar-export-btn"
+            type="button"
+            onClick={() => setShowExportModal(true)}
+            disabled={!captions.length}
+            title={captions.length ? "Export Subtitles & Green Screen MP4" : "Generate captions to enable export"}
+          >
+            <Download size={16} />
+            <span>Export</span>
+          </button>
         </div>
       </header>
 
       <section className="workspace">
-        <div
-          className="preview-panel"
-          style={controlPanelHeight ? { height: controlPanelHeight } : undefined}
-        >
-          <div className="upload-row">
-            <label className="file-button">
-              <Upload size={18} />
-              <span>Video</span>
-              <input type="file" accept="video/*" onChange={handleVideoUpload} />
-            </label>
-            <label className="file-button secondary">
-              <FileText size={18} />
-              <span>SRT/VTT</span>
-              <input
-                type="file"
-                accept=".srt,.vtt,text/vtt,application/x-subrip,text/plain"
-                onChange={handleSubtitleUpload}
-              />
-            </label>
-            {videoFile && (
-              <button
-                className="icon-text-button secondary"
-                type="button"
-                onClick={handleClearSession}
-                title="Clear current video and captions"
-              >
-                <RotateCcw size={16} />
-                Reset
-              </button>
-            )}
+        <div className="preview-panel">
+          <div className="panel-header-row">
+            <div className="section-title">
+              <Film size={18} />
+              <h2>Preview</h2>
+            </div>
+            <div className="upload-row">
+              {notifyFeedback && (
+                <div className={`action-toast-text ${notifyFeedback.type}`} role="status">
+                  {notifyFeedback.type === "save" ? <Check size={14} /> : <RotateCcw size={14} />}
+                  <span>{notifyFeedback.message}</span>
+                </div>
+              )}
+              <label className="file-button highlight">
+                <Upload size={16} />
+                <span>Video</span>
+                <input type="file" accept="video/*" onChange={handleVideoUpload} />
+              </label>
+              {(videoFile || captions.length > 0) && (
+                <>
+                  <button
+                    className="icon-text-button btn-save"
+                    type="button"
+                    onClick={handleSaveSession}
+                    title="Save current video, captions, and styles"
+                  >
+                    {savedFeedback ? <Check size={15} /> : <Save size={15} />}
+                    <span>{savedFeedback ? "Saved!" : "Save"}</span>
+                  </button>
+                  <button
+                    className="icon-text-button btn-reset"
+                    type="button"
+                    onClick={handleClearSession}
+                    title="Clear current video and captions"
+                  >
+                    <RotateCcw size={15} />
+                    <span>Reset</span>
+                  </button>
+                </>
+              )}
+            </div>
           </div>
 
           <div
@@ -909,9 +884,8 @@ export function App() {
                 {activeCaption && (
                   <div
                     key={`${activeCaption.id}-${style.animation}`}
-                    className={`subtitle-preview animation-${style.animation} ${
-                      style.showBackground ? "with-bg" : ""
-                    }`}
+                    className={`subtitle-preview animation-${style.animation} ${style.showBackground ? "with-bg" : ""
+                      }`}
                     style={previewSubtitleStyle}
                   >
                     {orderedPreviewLines
@@ -941,7 +915,7 @@ export function App() {
           {error && <p className="error-message">{error}</p>}
         </div>
 
-        <aside className="control-panel" ref={controlPanelRef}>
+        <aside className="control-panel">
           <section className="control-section">
             <div className="section-title">
               <Languages size={18} />
@@ -989,12 +963,12 @@ export function App() {
               <button
                 className="primary-button"
                 type="button"
-                onClick={() => generateCaptions(true)}
+                onClick={() => generateCaptions(false)}
                 disabled={!videoFile || Boolean(busy)}
-                title="Transcribe speech and auto-translate into dual subtitles in one click"
+                title="Transcribe speech into subtitles"
               >
                 <WandSparkles size={18} />
-                Generate & Translate
+                Generate
               </button>
               <button
                 className="secondary-button"
@@ -1007,7 +981,7 @@ export function App() {
                 Translate
               </button>
             </div>
-            <div className="field-grid">
+            <div className={provider === "libretranslate" ? "field-grid" : ""}>
               <label>
                 <span>Provider</span>
                 <select
@@ -1021,14 +995,15 @@ export function App() {
                   ))}
                 </select>
               </label>
-              <label>
-                <span>Endpoint</span>
-                <input
-                  value={libreTranslateUrl}
-                  onChange={(event) => setLibreTranslateUrl(event.target.value)}
-                  disabled={provider !== "libretranslate"}
-                />
-              </label>
+              {provider === "libretranslate" && (
+                <label>
+                  <span>Endpoint</span>
+                  <input
+                    value={libreTranslateUrl}
+                    onChange={(event) => setLibreTranslateUrl(event.target.value)}
+                  />
+                </label>
+              )}
             </div>
           </section>
 
@@ -1064,8 +1039,11 @@ export function App() {
                 </select>
               </label>
             </div>
-            <label>
-              <span>Size {safeFontSize}px</span>
+            <label className="slider-field">
+              <div className="slider-header">
+                <span>Size</span>
+                <span className="slider-badge">{safeFontSize}px</span>
+              </div>
               <input
                 type="range"
                 min={28}
@@ -1075,8 +1053,11 @@ export function App() {
                 onChange={handleFontSizeInput}
               />
             </label>
-            <label>
-              <span>Vertical</span>
+            <label className="slider-field">
+              <div className="slider-header">
+                <span>Vertical</span>
+                <span className="slider-badge">{style.vertical}%</span>
+              </div>
               <input
                 type="range"
                 min={8}
@@ -1086,8 +1067,11 @@ export function App() {
                 onChange={handleVerticalInput}
               />
             </label>
-            <label>
-              <span>Horizontal</span>
+            <label className="slider-field">
+              <div className="slider-header">
+                <span>Horizontal</span>
+                <span className="slider-badge">{style.horizontal}%</span>
+              </div>
               <input
                 type="range"
                 min={10}
@@ -1099,33 +1083,54 @@ export function App() {
             </label>
             <div className="field-grid color-grid">
               <label>
-                <span>Source</span>
-                <input
-                  type="color"
-                  value={style.textColor}
-                  onChange={(event) => setStyleValue("textColor", event.target.value)}
-                />
+                <div className="slider-header">
+                  <span>Source</span>
+                </div>
+                <div className="color-swatch-box">
+                  <input
+                    type="color"
+                    value={style.textColor}
+                    onChange={(event) => setStyleValue("textColor", event.target.value)}
+                  />
+                  <span className="swatch-color-dot" style={{ background: style.textColor }} />
+                  <span className="color-hex">{style.textColor.toUpperCase()}</span>
+                </div>
               </label>
               <label>
-                <span>Target</span>
-                <input
-                  type="color"
-                  value={style.translatedColor}
-                  onChange={(event) => setStyleValue("translatedColor", event.target.value)}
-                />
+                <div className="slider-header">
+                  <span>Target</span>
+                </div>
+                <div className="color-swatch-box">
+                  <input
+                    type="color"
+                    value={style.translatedColor}
+                    onChange={(event) => setStyleValue("translatedColor", event.target.value)}
+                  />
+                  <span className="swatch-color-dot" style={{ background: style.translatedColor }} />
+                  <span className="color-hex">{style.translatedColor.toUpperCase()}</span>
+                </div>
               </label>
             </div>
             <div className="field-grid color-grid">
               <label>
-                <span>Stroke</span>
-                <input
-                  type="color"
-                  value={style.outlineColor}
-                  onChange={(event) => setStyleValue("outlineColor", event.target.value)}
-                />
+                <div className="slider-header">
+                  <span>Stroke</span>
+                </div>
+                <div className="color-swatch-box">
+                  <input
+                    type="color"
+                    value={style.outlineColor}
+                    onChange={(event) => setStyleValue("outlineColor", event.target.value)}
+                  />
+                  <span className="swatch-color-dot" style={{ background: style.outlineColor }} />
+                  <span className="color-hex">{style.outlineColor.toUpperCase()}</span>
+                </div>
               </label>
-              <label>
-                <span>Stroke width {style.outlineWidth}px</span>
+              <label className="slider-field">
+                <div className="slider-header">
+                  <span>Stroke width</span>
+                  <span className="slider-badge">{style.outlineWidth}px</span>
+                </div>
                 <input
                   type="range"
                   min={0}
@@ -1212,277 +1217,373 @@ export function App() {
               </label>
             </div>
           </section>
-
-          <section className="control-section">
-            <div className="section-title">
-              <Download size={18} />
-              <h2>Export & Overlays</h2>
-            </div>
-
-            <div className="export-subsection">
-              <div className="subsection-header">
-                <span className="subsection-label">Subtitle Overlay Files (Instant)</span>
-                <button
-                  type="button"
-                  className="guide-toggle-btn"
-                  onClick={() => setShowOverlayGuide((prev) => !prev)}
-                  title="How to overlay on video"
-                >
-                  <HelpCircle size={14} />
-                  <span>How to use</span>
-                </button>
-              </div>
-
-              {showOverlayGuide && (
-                <div className="overlay-guide-box">
-                  <p><strong>To overlay subtitles on your video without lag:</strong></p>
-                  <ul>
-                    <li><strong>Green Screen MP4 (Fastest &amp; 100% styled):</strong> Drag the <code>.mp4</code> onto Track 2 above your video. In CapCut click <em>Video &rarr; Cutout &rarr; Chroma Key</em> and pick green. In Premiere use <em>Ultra Key</em>. In DaVinci use <em>3D Keyer</em>. Your styling is 100% preserved with zero rendering lag!</li>
-                    <li><strong>Transparent WebM:</strong> Drag onto Track 2 directly without needing Chroma Key.</li>
-                    <li><strong>CapCut SRT:</strong> Click <em>Text</em> &rarr; <em>Local Subtitles / Import</em> to load your <code>.srt</code> or <code>.ass</code>.</li>
-                    <li><strong>Premiere Pro:</strong> Drag <code>.srt</code>, <code>.ass</code>, or transparent video right onto the timeline track above your video.</li>
-                    <li><strong>DaVinci Resolve:</strong> Drag <code>.srt</code> or <code>.ass</code> onto the Subtitle track.</li>
-                  </ul>
-                </div>
-              )}
-
-              <div className="button-grid-subtitles">
-                <button
-                  type="button"
-                  className="download-pill-btn highlight"
-                  onClick={() => downloadSrt("dual")}
-                  disabled={!captions.length}
-                  title="Download Dual SRT (Source & Translation)"
-                >
-                  <FileText size={14} />
-                  <span>Dual SRT</span>
-                </button>
-                <button
-                  type="button"
-                  className="download-pill-btn highlight-ass"
-                  onClick={downloadAss}
-                  disabled={!captions.length}
-                  title="Download Styled SubStation Alpha (.ass) with exact colors & fonts"
-                >
-                  <FileText size={14} />
-                  <span>Styled (.ass)</span>
-                </button>
-                <button
-                  type="button"
-                  className="download-pill-btn"
-                  onClick={() => downloadSrt("source")}
-                  disabled={!captions.length}
-                  title="Download Source Language SRT"
-                >
-                  <span>Source SRT</span>
-                </button>
-                <button
-                  type="button"
-                  className="download-pill-btn"
-                  onClick={() => downloadSrt("translation")}
-                  disabled={!captions.length}
-                  title="Download Translated SRT"
-                >
-                  <span>Target SRT</span>
-                </button>
-                <button
-                  type="button"
-                  className="download-pill-btn"
-                  onClick={() => downloadVtt("dual")}
-                  disabled={!captions.length}
-                  title="Download WebVTT (.vtt)"
-                >
-                  <span>WebVTT</span>
-                </button>
-              </div>
-            </div>
-
-            <div className="export-subsection" style={{ marginTop: "16px" }}>
-              <span className="subsection-label">Video Overlays &amp; Burn-in</span>
-              <div className="field-grid" style={{ margin: "8px 0 10px" }}>
-                <label>
-                  <span>Framerate</span>
-                  <select
-                    value={exportFps}
-                    onChange={(e) => setExportFps(Number(e.target.value) as 30 | 60)}
-                  >
-                    <option value={60}>60 FPS (Ultra Smooth)</option>
-                    <option value={30}>30 FPS (Standard)</option>
-                  </select>
-                </label>
-              </div>
-
-              <div className="video-export-actions">
-                <button
-                  className="export-button green-screen-btn"
-                  type="button"
-                  onClick={exportGreenScreenVideo}
-                  disabled={!captions.length || Boolean(busy)}
-                  title="Ultra-fast MP4 overlay (renders in seconds, 0% lag). Drop on Track 2 in CapCut / Premiere / DaVinci and click Chroma Key!"
-                >
-                  <Sparkles size={18} />
-                  <span>Green Screen MP4 (Ultra Fast)</span>
-                </button>
-
-                <button
-                  className="export-button secondary-overlay-btn"
-                  type="button"
-                  onClick={exportOverlayVideo}
-                  disabled={!captions.length || Boolean(busy)}
-                  title="Export transparent video overlay (.webm with alpha) to drop onto Track 2 in CapCut / Premiere / DaVinci"
-                >
-                  <Layers size={18} />
-                  <span>Transparent Overlay (.webm)</span>
-                </button>
-
-                <button
-                  className="export-button"
-                  type="button"
-                  onClick={exportVideo}
-                  disabled={!videoFile || !captions.length || Boolean(busy)}
-                  title="Burn subtitles directly into video file"
-                >
-                  <Download size={18} />
-                  <span>Burn into Video ({exportFps} FPS)</span>
-                </button>
-              </div>
-            </div>
-          </section>
         </aside>
 
-        <section
-          className="editor-panel"
-          style={controlPanelHeight ? { height: controlPanelHeight } : undefined}
-        >
-        <div className="editor-header">
-          <div className="section-title">
-            <Type size={18} />
-            <h2>Caption Editor</h2>
-          </div>
-          <div className="editor-meta">
-            <Settings2 size={16} />
-            <span>{captions.length} cues</span>
-            <span>{formatClockTime(currentTime)}</span>
-            <button
-              className="icon-text-button add-cue-btn"
-              type="button"
-              onClick={addCaption}
-              title="Add caption at current playback time"
-            >
-              <Plus size={16} />
-              <span>Add</span>
-            </button>
-          </div>
-        </div>
-
-        {captions.length ? (
-          <div className="caption-list">
-            {captions.map((caption, index) => (
-              <article
-                className={activeCaption?.id === caption.id ? "caption-row active" : "caption-row"}
-                key={caption.id}
-              >
-                <div className="row-index">{index + 1}</div>
-                <div className="time-fields">
-                  <label>
-                    <span>Start</span>
-                    <input
-                      type="number"
-                      min={0}
-                      step={0.1}
-                      value={Number(caption.start.toFixed(1))}
-                      onChange={(event) =>
-                        updateCaption(caption.id, {
-                          start: Number(event.target.value)
-                        })
-                      }
-                    />
-                  </label>
-                  <label>
-                    <span>End</span>
-                    <input
-                      type="number"
-                      min={0}
-                      step={0.1}
-                      value={Number(caption.end.toFixed(1))}
-                      onChange={(event) =>
-                        updateCaption(caption.id, {
-                          end: Number(event.target.value)
-                        })
-                      }
-                    />
-                  </label>
-                </div>
-                <label className="text-field">
-                  <span>Source line</span>
-                  <textarea
-                    value={caption.source}
-                    onChange={(event) =>
-                      updateCaption(caption.id, {
-                        source: event.target.value
-                      })
-                    }
-                  />
-                </label>
-                <label className="text-field">
-                  <span>Target line</span>
-                  <textarea
-                    value={caption.translation}
-                    onChange={(event) =>
-                      updateCaption(caption.id, {
-                        translation: event.target.value
-                      })
-                    }
-                  />
-                </label>
-                <button
-                  className="icon-button danger"
-                  type="button"
-                  title="Delete caption"
-                  onClick={() => removeCaption(caption.id)}
-                >
-                  <Trash2 size={17} />
-                </button>
-              </article>
-            ))}
-          </div>
-        ) : (
-          <div className="empty-editor">
-            <FileText size={28} />
-            <span>No captions yet</span>
-            {videoFile ? (
+        <section className="editor-panel">
+          <div className="editor-header">
+            <div className="section-title">
+              <Type size={18} />
+              <h2>Caption Editor</h2>
+            </div>
+            <div className="editor-meta">
+              <span className="meta-pill">
+                <Layers size={13} />
+                <span>{captions.length} cues</span>
+              </span>
+              <span className="meta-pill">
+                <Clock size={13} />
+                <span>{formatClockTime(currentTime)}</span>
+              </span>
               <button
-                className="primary-button"
+                className="icon-text-button add-cue-btn primary-glow"
                 type="button"
-                onClick={() => generateCaptions(true)}
-                disabled={Boolean(busy)}
-                style={{ marginTop: "10px", gap: "8px", maxWidth: "220px" }}
+                onClick={addCaption}
+                title="Add caption at current playback time"
               >
-                <WandSparkles size={16} />
-                <span>Generate Subtitles</span>
+                <Plus size={15} />
+                <span>Add</span>
               </button>
-            ) : (
-              <p style={{ fontSize: "0.82rem", color: "var(--text-muted)", margin: "6px 0 0" }}>
-                Upload a video or import an SRT file to start
-              </p>
-            )}
-            <button
-              className="icon-text-button secondary add-cue-btn"
-              type="button"
-              onClick={addCaption}
-              style={{ maxWidth: "160px", marginTop: "8px" }}
-            >
-              <Plus size={14} />
-              <span>Add manual cue</span>
-            </button>
+            </div>
           </div>
-        )}
-      </section>
+
+          {captions.length ? (
+            <div className="caption-list">
+              {captions.map((caption, index) => (
+                <article
+                  className={activeCaption?.id === caption.id ? "caption-row active" : "caption-row"}
+                  key={caption.id}
+                >
+                  <div className="row-index">{index + 1}</div>
+                  <div className="time-fields">
+                    <label>
+                      <span>Start</span>
+                      <input
+                        type="number"
+                        min={0}
+                        step={0.1}
+                        value={Number(caption.start.toFixed(1))}
+                        onChange={(event) =>
+                          updateCaption(caption.id, {
+                            start: Number(event.target.value)
+                          })
+                        }
+                      />
+                    </label>
+                    <label>
+                      <span>End</span>
+                      <input
+                        type="number"
+                        min={0}
+                        step={0.1}
+                        value={Number(caption.end.toFixed(1))}
+                        onChange={(event) =>
+                          updateCaption(caption.id, {
+                            end: Number(event.target.value)
+                          })
+                        }
+                      />
+                    </label>
+                  </div>
+                  <label className="text-field">
+                    <span>Source line</span>
+                    <textarea
+                      value={caption.source}
+                      onChange={(event) =>
+                        updateCaption(caption.id, {
+                          source: event.target.value
+                        })
+                      }
+                    />
+                  </label>
+                  <label className="text-field">
+                    <span>Target line</span>
+                    <textarea
+                      value={caption.translation}
+                      onChange={(event) =>
+                        updateCaption(caption.id, {
+                          translation: event.target.value
+                        })
+                      }
+                    />
+                  </label>
+                  <button
+                    className="icon-button danger"
+                    type="button"
+                    title="Delete caption"
+                    onClick={() => removeCaption(caption.id)}
+                  >
+                    <Trash2 size={17} />
+                  </button>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <div className="empty-editor">
+              <FileText size={28} />
+              <span>No captions yet</span>
+              {videoFile ? (
+                <button
+                  className="primary-button"
+                  type="button"
+                  onClick={() => generateCaptions(true)}
+                  disabled={Boolean(busy)}
+                  style={{ marginTop: "10px", gap: "8px", maxWidth: "220px" }}
+                >
+                  <WandSparkles size={16} />
+                  <span>Generate Subtitles</span>
+                </button>
+              ) : (
+                <p style={{ fontSize: "0.82rem", color: "var(--text-muted)", margin: "6px 0 0" }}>
+                  Upload a video or import an SRT file to start
+                </p>
+              )}
+              <button
+                className="icon-text-button secondary add-cue-btn"
+                type="button"
+                onClick={addCaption}
+                style={{ maxWidth: "160px", marginTop: "8px" }}
+              >
+                <Plus size={14} />
+                <span>Add manual cue</span>
+              </button>
+            </div>
+          )}
+        </section>
       </section>
 
       <footer className="app-footer">
-      © All rights reserved by Ana Vassallo
+        © All rights reserved by Ana Vassallo
       </footer>
+
+      {showExportModal && (
+        <div className="modal-backdrop" onClick={() => setShowExportModal(false)}>
+          <div
+            className="modal-card"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="modal-title"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="modal-header">
+              <div className="modal-title" id="modal-title">
+                <Download size={20} className="modal-icon" />
+                <h2>Export &amp; Overlays</h2>
+              </div>
+              <button
+                type="button"
+                className="modal-close-btn"
+                onClick={() => setShowExportModal(false)}
+                aria-label="Close export dialog"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="modal-body">
+              <div className="export-subsection">
+                <div className="subsection-header">
+                  <span className="subsection-label">Subtitle Files (SRT)</span>
+                </div>
+
+                <div className="button-grid-subtitles">
+                  <button
+                    type="button"
+                    className={`download-pill-btn ${selectedSrtMode === "dual" ? "highlight" : ""}`}
+                    onClick={() => setSelectedSrtMode("dual")}
+                    title="Select Dual language subtitles (Source &amp; Translation together)"
+                  >
+                    <FileText size={15} />
+                    <span>Dual SRT</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`download-pill-btn ${selectedSrtMode === "source" ? "highlight" : ""}`}
+                    onClick={() => setSelectedSrtMode("source")}
+                    title="Select Source Language subtitles only"
+                  >
+                    <span>Source SRT</span>
+                  </button>
+                  <button
+                    type="button"
+                    className={`download-pill-btn ${selectedSrtMode === "translation" ? "highlight" : ""}`}
+                    onClick={() => setSelectedSrtMode("translation")}
+                    title="Select Translated Target subtitles only"
+                  >
+                    <span>Target SRT</span>
+                  </button>
+                </div>
+
+                <div style={{ display: "flex", justifyContent: "center", marginTop: "12px" }}>
+                  <button
+                    type="button"
+                    className={`export-button srt-export-btn ${srtSuccess ? "success" : ""}`}
+                    style={{
+                      width: "100%",
+                      maxWidth: "280px",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: "8px"
+                    }}
+                    onClick={handleExportSrt}
+                    disabled={!captions.length || srtSuccess}
+                    title={`Export ${selectedSrtMode === "dual" ? "Dual" : selectedSrtMode === "source" ? "Source" : "Target"} SRT file`}
+                  >
+                    {srtSuccess ? (
+                      <>
+                        <Check size={17} />
+                        <span>Download successful!</span>
+                      </>
+                    ) : (
+                      <>
+                        <Download size={17} />
+                        <span>
+                          {selectedSrtMode === "dual"
+                            ? "Export Dual SRT"
+                            : selectedSrtMode === "source"
+                            ? "Export Source SRT"
+                            : "Export Target SRT"}
+                        </span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              <div className="export-subsection" style={{ marginTop: "20px" }}>
+                <div className="subsection-header" style={{ justifyContent: "center" }}>
+                  <span className="subsection-label">Video Overlay (Green Screen)</span>
+                </div>
+
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    margin: "12px 0 10px",
+                    textAlign: "center"
+                  }}
+                >
+                  <label
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "center",
+                      width: "100%",
+                      maxWidth: "280px",
+                      gap: "6px"
+                    }}
+                  >
+                    <span style={{ fontSize: "0.82rem", fontWeight: 800 }}>Framerate</span>
+                    <select
+                      value={exportFps}
+                      onChange={(e) => setExportFps(Number(e.target.value) as 30 | 60)}
+                      style={{
+                        textAlign: "center",
+                        textAlignLast: "center",
+                        width: "100%",
+                        cursor: "pointer"
+                      }}
+                    >
+                      <option value={60}>60 FPS (Ultra Smooth)</option>
+                      <option value={30}>30 FPS (Standard)</option>
+                    </select>
+                  </label>
+                </div>
+
+                <div
+                  className="video-export-actions"
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    width: "100%"
+                  }}
+                >
+                  <button
+                    className={`export-button green-screen-btn ${exportSuccess ? "success" : ""}`}
+                    type="button"
+                    style={{
+                      width: "100%",
+                      maxWidth: "280px",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center"
+                    }}
+                    onClick={exportGreenScreenVideo}
+                    disabled={!captions.length || Boolean(busy) || exportSuccess}
+                    title="Export Green Screen MP4 with all styles to drop onto Track 2 in CapCut / Premiere / DaVinci"
+                  >
+                    {busy === "export" ? (
+                      <>
+                        <Loader2 className="spin" size={18} />
+                        <span>Rendering {Math.round(progress * 100)}%</span>
+                      </>
+                    ) : exportSuccess ? (
+                      <>
+                        <Check size={18} />
+                        <span>Download successful!</span>
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles size={18} />
+                        <span>Green Screen MP4</span>
+                      </>
+                    )}
+                  </button>
+
+                  {(busy === "export" || exportSuccess) && (
+                    <div className="modal-progress-box" role="progressbar" aria-valuenow={exportSuccess ? 100 : Math.round(progress * 100)}>
+                      <div className="modal-progress-info">
+                        <span className="modal-progress-label">
+                          {exportSuccess ? <Check size={14} /> : <Loader2 className="spin" size={13} />}
+                          <span>{exportSuccess ? "Download successful!" : status}</span>
+                        </span>
+                        <span className="modal-progress-pct">{exportSuccess ? "100%" : `${Math.round(progress * 100)}%`}</span>
+                      </div>
+                      <div className="progress-track" aria-label="Export Progress">
+                        <span style={{ width: exportSuccess ? "100%" : `${Math.round(progress * 100)}%` }} />
+                      </div>
+                    </div>
+                  )}
+
+                  <button
+                    type="button"
+                    className="guide-toggle-btn"
+                    onClick={() => setShowGreenScreenGuide((prev) => !prev)}
+                    title="How to use in CapCut (Intensity 85%)"
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: "6px",
+                      marginTop: "10px",
+                      padding: "4px 10px",
+                      cursor: "pointer"
+                    }}
+                  >
+                    <HelpCircle size={15} />
+                    <span>How to use</span>
+                  </button>
+                </div>
+
+                {showGreenScreenGuide && (
+                  <div className="overlay-guide-box" style={{ marginTop: "12px" }}>
+                    <p><strong>How to use in CapCut:</strong></p>
+                    <ol style={{ margin: "0 0 4px 18px", padding: 0, fontSize: "0.82rem", display: "flex", flexDirection: "column", gap: "4px" }}>
+                      <li>Drop the downloaded <strong>Green Screen MP4</strong> onto <strong>Track 2</strong> directly above your video.</li>
+                      <li>Click the green clip on the timeline &rarr; go to <strong>Video</strong> &rarr; <strong>Remove BG</strong>.</li>
+                      <li>Check <strong>Chroma key</strong>.</li>
+                      <li>Click the <strong>Color picker</strong> (eyedropper) &amp; click on the green background.</li>
+                      <li>Set <strong>Intensity to 85</strong>.</li>
+                    </ol>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
