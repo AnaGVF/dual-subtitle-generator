@@ -17,6 +17,10 @@
   <img src="https://img.shields.io/badge/Privacy-100%25%20In--Browser-10B981?style=for-the-badge" alt="Privacy First" />
 </p>
 
+<p align="center">
+  <img src="./images/dual%20subtitle%20generator%20preview.png" alt="Dual Subtitle Generator UI Preview" width="100%" />
+</p>
+
 ---
 
 ## 💡 Why Dual Subtitle Generator?
